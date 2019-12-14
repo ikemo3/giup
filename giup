@@ -1,0 +1,63 @@
+#!/usr/bin/env python3
+
+import os
+import re
+import subprocess
+import sys
+from os.path import abspath
+
+GIBO_HEADER_PATTERN = re.compile(r"^### (https://raw\.github\.com/github/gitignore/([^/]+)/(.*\.gitignore))$")
+GIBO_LANG_PATTERN = re.compile(r"^(.*/)?([^/]+).gitignore")
+
+if len(sys.argv) == 1:
+    print("Usage: giup path-of-gitignore", file=sys.stderr)
+    exit(1)
+
+gitignore_path = abspath(sys.argv[1])
+
+
+def get_new_gitignore(lang: str) -> bytes:
+    return subprocess.check_output(["gibo", "dump", lang])
+
+
+def get_current_gitignore(url: str, sha1: str, path: str) -> bytes:
+    rev = f"{sha1}:{path}"
+    gitignore_repo = os.path.expanduser("~/.gitignore-boilerplates")
+    contents = subprocess.check_output(["git", "cat-file", "-p", rev], cwd=gitignore_repo)
+    header = f"### {url}\n\n"
+    return bytes(header, "utf-8") + contents + b"\n\n"
+
+
+def get_header(line: str) -> dict:
+    match_header = GIBO_HEADER_PATTERN.match(line)
+    if match_header:
+        url = match_header.group(1)
+        sha1 = match_header.group(2)
+        path = match_header.group(3)
+        match_lang = GIBO_LANG_PATTERN.match(path)
+        if match_lang:
+            lang = match_lang.group(2)
+            return dict(url=url, lang=lang, hash=sha1, path=path)
+
+
+def main(path: str):
+    # open as binary because some .gitignore(ex. macOS) contains control code
+    with open(path, mode="rb") as f:
+        contents = f.read()
+
+    headers = []
+    for line in contents.split(b"\n"):
+        header = get_header(line.decode("utf-8"))
+        if header:
+            headers.append(header)
+
+    for header in headers:
+        current_gitignore = get_current_gitignore(header["url"], header["hash"], header["path"])
+        new_gitignore = get_new_gitignore(header["lang"])
+        contents = contents.replace(current_gitignore, new_gitignore)
+
+    with open(path, mode="wb") as f:
+        f.write(contents)
+
+
+main(gitignore_path)
